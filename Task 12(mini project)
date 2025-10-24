@@ -1,0 +1,500 @@
+Airline Reservation & Ticketing — Answers for items 11–15
+
+Below are clear, exam/assignment-ready answers with examples you can copy into your submission. I’ll cover entities & attributes, normalization + functional dependencies, SQL examples (schema + queries for availability, booking, cancel), concurrency control strategies for multiple simultaneous bookings, and example CRUD operations for reservation tracking in a modern NoSQL DB (MongoDB).
+
+
+---
+
+11. Entities (core) — attributes & brief notes
+
+1. Flight
+
+FlightID (PK)
+
+FlightNumber
+
+Airline
+
+OriginAirportCode
+
+DestinationAirportCode
+
+DepartureTime (datetime)
+
+ArrivalTime (datetime)
+
+AircraftID (FK)
+
+TotalSeats
+
+AvailableSeats (or compute from seat allocations)
+
+Status (Scheduled/Delayed/Canceled)
+
+Notes: flights are scheduled instances; a separate Route entity can hold static route info.
+
+
+
+2. Aircraft
+
+AircraftID (PK)
+
+Model
+
+SeatMap (or seat count/structure)
+
+RegistrationNumber
+
+
+
+3. Passenger
+
+PassengerID (PK)
+
+FirstName, LastName
+
+DOB
+
+Email
+
+Phone
+
+PassportNumber / GovID
+
+FrequentFlyerNumber (optional)
+
+
+
+4. **Booking (or Reservation)
+
+BookingID (PK)
+
+PassengerID (FK)
+
+BookingTime
+
+BookingStatus (Confirmed/Held/Canceled)
+
+TotalAmount
+
+PaymentID (FK, nullable until paid)
+
+PaymentStatus
+
+
+
+5. Ticket
+
+TicketID (PK)
+
+BookingID (FK)
+
+FlightID (FK)
+
+SeatNumber
+
+Class (Economy/Business/First)
+
+TicketStatus (Issued/Cancelled/Refunded)
+
+
+
+6. Payment
+
+PaymentID (PK)
+
+BookingID (FK)
+
+Amount
+
+PaymentMethod (Card/UPI/Wallet)
+
+PaymentTime
+
+PaymentStatus (Paid/Failed/Refunded)
+
+TransactionRef
+
+
+
+7. SeatAllocation (optional, useful for per-seat control)
+
+AllocationID
+
+FlightID
+
+SeatNumber
+
+PassengerID (nullable until confirmed)
+
+BookingID (nullable)
+
+Status (Free/Held/Booked)
+
+HoldExpiry (datetime for temporary holds)
+
+
+
+8. Audit / Logs
+
+AuditID, Entity, EntityID, Action, UserID, Timestamp, Details
+
+
+
+
+
+---
+
+12. Normalization & Functional Dependencies (FDs)
+
+Functional dependencies (sample)
+
+Assume relation Flight(FlightID, FlightNumber, Airline, Origin, Destination, DepartureTime, ArrivalTime, AircraftID, TotalSeats):
+
+FlightID → FlightNumber, Airline, Origin, Destination, DepartureTime, ArrivalTime, AircraftID, TotalSeats
+(FlightID uniquely identifies a flight record.)
+
+FlightNumber, DepartureTime → FlightID
+(Flight number + departure time identifies a scheduled flight instance.)
+
+
+For Passenger(PassengerID, PassportNumber, FirstName, LastName, DOB, Email):
+
+PassengerID → PassportNumber, FirstName, LastName, DOB, Email
+
+PassportNumber → PassengerID, FirstName, LastName, DOB, Email (if unique)
+
+
+For Booking(BookingID, PassengerID, BookingTime, TotalAmount, PaymentID, BookingStatus):
+
+BookingID → PassengerID, BookingTime, TotalAmount, PaymentID, BookingStatus
+
+
+For Ticket(TicketID, BookingID, FlightID, SeatNumber, Class, TicketStatus):
+
+TicketID → BookingID, FlightID, SeatNumber, Class, TicketStatus
+
+BookingID, FlightID → SeatNumber (if booking of a specific flight maps to a seat)
+
+
+Normalization steps (to 3NF)
+
+1. 1NF: Ensure atomic values—no repeating seat numbers in a single column; use separate rows for each ticket/seat.
+
+
+2. 2NF: Remove partial dependencies. Example: if a composite PK existed (BookingID, FlightID) and attributes like PassengerName depend only on BookingID, move passenger details to Passenger table.
+
+
+3. 3NF: Remove transitive dependencies. Example: if Booking stores PaymentStatus and PaymentTime is in Payment, keep payment details in Payment table; Booking only references PaymentID.
+
+
+
+Example normalization decisions
+
+Keep Passenger separate from Booking. PassengerID is FK in Booking.
+
+Keep Flight separate from SeatAllocation. Seat states (Held/Booked) go into SeatAllocation.
+
+Payment separate—avoids storing redundant payment fields in Booking.
+
+
+
+---
+
+13. SQL: schema snippets + queries
+
+Example simplified schema (PostgreSQL-ish)
+
+CREATE TABLE Flight (
+  FlightID SERIAL PRIMARY KEY,
+  FlightNumber VARCHAR(10) NOT NULL,
+  Airline VARCHAR(50),
+  Origin VARCHAR(3),
+  Destination VARCHAR(3),
+  DepartureTime TIMESTAMP,
+  ArrivalTime TIMESTAMP,
+  TotalSeats INTEGER,
+  AvailableSeats INTEGER
+);
+
+CREATE TABLE Passenger (
+  PassengerID SERIAL PRIMARY KEY,
+  FirstName VARCHAR(50),
+  LastName VARCHAR(50),
+  Email VARCHAR(255) UNIQUE,
+  Phone VARCHAR(20),
+  PassportNumber VARCHAR(50) UNIQUE
+);
+
+CREATE TABLE Booking (
+  BookingID SERIAL PRIMARY KEY,
+  PassengerID INTEGER REFERENCES Passenger(PassengerID),
+  BookingTime TIMESTAMP DEFAULT now(),
+  BookingStatus VARCHAR(20), -- Held/Confirmed/Canceled
+  TotalAmount NUMERIC(10,2),
+  PaymentID INTEGER -- references Payment if created
+);
+
+CREATE TABLE Ticket (
+  TicketID SERIAL PRIMARY KEY,
+  BookingID INTEGER REFERENCES Booking(BookingID),
+  FlightID INTEGER REFERENCES Flight(FlightID),
+  SeatNumber VARCHAR(5),
+  Class VARCHAR(20),
+  TicketStatus VARCHAR(20)
+);
+
+CREATE TABLE Payment (
+  PaymentID SERIAL PRIMARY KEY,
+  BookingID INTEGER REFERENCES Booking(BookingID),
+  Amount NUMERIC(10,2),
+  PaymentMethod VARCHAR(20),
+  PaymentTime TIMESTAMP,
+  PaymentStatus VARCHAR(20),
+  TransactionRef VARCHAR(100)
+);
+
+
+---
+
+Query A — Retrieve available flights (by route & date)
+
+-- Parameters: :origin, :destination, :from_date, :to_date
+SELECT FlightID, FlightNumber, Airline, DepartureTime, ArrivalTime, AvailableSeats
+FROM Flight
+WHERE Origin = :origin
+  AND Destination = :destination
+  AND DepartureTime BETWEEN :from_date AND :to_date
+  AND AvailableSeats > 0
+ORDER BY DepartureTime;
+
+
+---
+
+Query B — Book tickets (transactional, seat decrement + insert booking + tickets)
+
+Use a transaction to ensure atomicity and avoid overbooking. Example (Postgres):
+
+BEGIN;
+
+-- 1) Reserve (decrement) seats atomically if enough seats exist
+UPDATE Flight
+SET AvailableSeats = AvailableSeats - :num_seats
+WHERE FlightID = :flight_id
+  AND AvailableSeats >= :num_seats
+RETURNING FlightID;
+
+-- check if update returned a row
+-- in application logic: if no row returned -> rollback & inform no seats
+
+-- 2) Create booking
+INSERT INTO Booking (PassengerID, BookingStatus, TotalAmount)
+VALUES (:passenger_id, 'Confirmed', :amount)
+RETURNING BookingID;
+
+-- 3) Insert tickets (one row per seat)
+INSERT INTO Ticket (BookingID, FlightID, SeatNumber, Class, TicketStatus)
+VALUES (:booking_id, :flight_id, :seat_number, :class, 'Issued'); -- repeated per seat
+
+COMMIT;
+
+If any step fails, ROLLBACK.
+
+Note: For seat-specific bookings, use a SeatAllocation table and update a specific seat row from Free → Held → Booked using findOneAndUpdate style atomic operation (or SQL UPDATE ... WHERE status='Free' LIMIT 1 with RETURNING).
+
+
+---
+
+Query C — Cancel booking and refund (transactional)
+
+BEGIN;
+
+-- 1) Mark booking cancelled
+UPDATE Booking
+SET BookingStatus = 'Canceled'
+WHERE BookingID = :booking_id;
+
+-- 2) Update tickets
+UPDATE Ticket
+SET TicketStatus = 'Canceled'
+WHERE BookingID = :booking_id;
+
+-- 3) Refund / payment status
+UPDATE Payment
+SET PaymentStatus = 'Refunded'
+WHERE BookingID = :booking_id AND PaymentStatus = 'Paid';
+
+-- 4) Return seats to flight (increase available seats)
+-- assume we can count how many tickets were booked on that booking for that flight
+UPDATE Flight f
+SET AvailableSeats = f.AvailableSeats + t.cnt
+FROM (
+  SELECT FlightID, COUNT(*) AS cnt
+  FROM Ticket
+  WHERE BookingID = :booking_id AND TicketStatus = 'Canceled'
+  GROUP BY FlightID
+) t
+WHERE f.FlightID = t.FlightID;
+
+COMMIT;
+
+Edge cases: partial refunds, cancellation fees, hold vs confirmed state, time-based refund rules — handle in business logic.
+
+
+---
+
+14. Concurrency control in multiple-ticket booking scenarios
+
+Concurrency is critical to avoid overbooking and inconsistent seat assignment. Main strategies:
+
+1) Database transactions & isolation levels
+
+Serializable: safest but can cause more rollbacks/transactions conflicts. Guarantees correctness as if serial execution.
+
+Repeatable Read / Read Committed: works if combined with row-level locking/optimistic checks.
+
+
+2) Row-level locking / SELECT ... FOR UPDATE
+
+Lock the flight row or the seat rows when allocating seats.
+
+
+SELECT AvailableSeats FROM Flight WHERE FlightID=:id FOR UPDATE;
+-- then check and UPDATE AvailableSeats
+
+This prevents concurrent transactions from reading stale seat count.
+
+3) Optimistic concurrency (versioning)
+
+Add version or row_version column. Read current version and UPDATE ... WHERE id = :id AND version = :old_version and then increment version. If update affects 0 rows, a concurrent update happened — retry transaction.
+
+
+4) Pessimistic locking / distributed locks
+
+Use an external distributed lock (Redis RedLock) when multiple application servers must coordinate seat allocation across DB shards. Acquire lock per FlightID for seat allocation critical section. Use with timeouts and careful retry.
+
+
+5) Seat-hold with TTL (two-step commit-like flow)
+
+Step 1: Hold: Create a temporary hold (SeatAllocation.status='Held') with HoldExpiry = now()+X minutes. Deduct AvailableSeats or mark seats as held atomically.
+
+Step 2: Confirm (within TTL): On payment success, convert Held → Booked.
+
+Auto-release: background job or DB TTL index removes expired holds and returns seats.
+
+
+6) Use atomic DB operations for seat count
+
+UPDATE Flight SET AvailableSeats = AvailableSeats - :n WHERE AvailableSeats >= :n — single atomic statement reduces races vs read-then-write.
+
+
+7) Idempotency & retries
+
+Ensure operations are idempotent (booking requests have idempotency token). If client retries due to timeout, server recognizes repeated request and avoids duplicate bookings.
+
+
+8) Eventual consistency & compensation
+
+In microservices, use events (booking-created, payment-confirmed). If payment fails post-reservation, send compensating event to release seats. Prefer transactional outbox pattern to avoid lost messages.
+
+
+Recommended practical approach
+
+Use transaction + SELECT ... FOR UPDATE (or atomic UPDATE) for seat count + hold pattern with TTL for payments. Combine with optimistic versioning for scale. Use idempotency tokens and monitor rollbacks to decide retry/backoff logic.
+
+
+
+---
+
+15. CRUD in a modern NoSQL DB for reservation tracking (MongoDB examples)
+
+Use MongoDB collections: flights, passengers, bookings, tickets, payments, seatAllocations.
+
+Example document shapes
+
+flights
+
+{
+  "_id": ObjectId("..."),
+  "flightNumber": "AI101",
+  "airline": "Air India",
+  "origin": "DEL",
+  "destination": "BOM",
+  "departureTime": ISODate("2025-11-01T06:00:00Z"),
+  "arrivalTime": ISODate("2025-11-01T08:00:00Z"),
+  "totalSeats": 180,
+  "availableSeats": 42,
+  "seatMap": { "1A": "Free", "1B": "Booked", ... }
+}
+
+bookings
+
+{
+  "_id": ObjectId("..."),
+  "passengerId": ObjectId("..."),
+  "bookingTime": ISODate("2025-10-20T12:34:56Z"),
+  "status": "Confirmed",
+  "tickets": [
+    { "flightId": ObjectId("..."), "seatNumber": "12A", "class": "Economy", "ticketId": ObjectId("...") }
+  ],
+  "totalAmount": 123.45,
+  "paymentId": ObjectId("...")
+}
+
+seatAllocations (useful for atomic seat holds)
+
+{
+  "_id": ObjectId("..."),
+  "flightId": ObjectId("..."),
+  "seatNumber": "12A",
+  "status": "Held", // Free, Held, Booked
+  "holdByBooking": ObjectId("..."),
+  "holdExpiry": ISODate("2025-10-20T12:45:56Z")
+}
+
+Create (Insert) — create a booking with seat hold (atomic approach)
+
+Use findOneAndUpdate to atomically change a free seat to held:
+
+// Node.js / MongoDB driver example (pseudo)
+const seat = await seatAllocations.findOneAndUpdate(
+  { flightId: flightId, seatNumber: "12A", status: "Free" },
+  { $set: { status: "Held", holdByBooking: bookingId, holdExpiry: new Date(Date.now() + 15*60000) } },
+  { returnDocument: "after" }
+);
+
+if (!seat.value) {
+  // seat not available
+  throw new Error("Seat not available");
+}
+
+// Decrement availableSeats atomically
+await flights.updateOne(
+  { _id: flightId, availableSeats: { $gte: 1 } },
+  { $inc: { availableSeats: -1 } }
+);
+
+// Insert booking doc
+await bookings.insertOne({ passengerId, bookingTime: new Date(), status: "Pending", tickets: [...], totalAmount });
+
+Read (Query available flights)
+
+db.flights.find({
+  origin: "DEL",
+  destination: "BOM",
+  departureTime: { $gte: ISODate("2025-11-01T00:00:00Z"), $lte: ISODate("2025-11-02T00:00:00Z") },
+  availableSeats: { $gt: 0 }
+}).sort({ departureTime: 1 });
+
+Update (confirm booking & issue tickets)
+
+Once payment succeeds, atomically update booking and seatAllocation:
+
+// Mark seat as Booked
+await seatAllocations.updateOne(
+  { flightId, seatNumber: "12A", status: "Held", holdByBooking: bookingId },
+  { $set: { status: "Booked" }, $unset: { holdExpiry: "" } }
+);
+
+//
+
