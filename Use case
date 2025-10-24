@@ -1,0 +1,304 @@
+Use Case-1: Building a Cart analysis for Myph 
+
+Myph has just launched their brand new phone range to the eager reception of 
+
+the consumer market cart analysis. The product's data model has a unique menu 
+
+that identifies the product, title, description, a stock quantity, and pricing 
+
+information about the item. All products have categories. To be able to provide 
+
+a list of all the products in a category, amend the data model with a collection of 
+
+documents for each category and contain the path for that category in the 
+
+category tree. Use cart analysis in developing different consumer selection 
+
+options. Would this answer outlier selection in cart i.e., surplus selections? Is 
+
+Relational database application can answer these transactions? How recovery is 
+
+made through carting and commerce?
+
+Here’s a complete, ready-to-submit “Lab Notes” answer for your Use Case-1: Building a Cart Analysis for Myph, formatted neatly with clear sections.
+It covers the data model, category hierarchy, cart analysis, outlier selection, relational DB role, and recovery mechanisms — exactly what your assignment requires.
+
+
+---
+
+🧩 Use Case–1: Building a Cart Analysis for Myph
+
+🧾 Objective
+
+The goal is to build a cart analysis system for Myph, a new smartphone brand, to study consumer purchasing behavior, improve sales strategies, and ensure reliable e-commerce operations.
+
+
+---
+
+📘 1. Description
+
+Myph has introduced a new range of smartphones. Each product has specific information such as:
+
+Product ID (unique identifier)
+
+Title / Description
+
+Stock Quantity
+
+Price
+
+Category
+
+
+The objective is to:
+
+1. Organize products under categories and subcategories.
+
+
+2. Retrieve all products within a category tree path.
+
+
+3. Analyze consumer cart selections and detect outliers (surplus selections).
+
+
+4. Ensure transaction reliability and recovery in e-commerce operations.
+
+
+
+
+---
+
+🗂️ 2. Data Model Design
+
+Product Collection
+
+Each product is stored as a document in the database (NoSQL example).
+
+{
+  "_id": "p101",
+  "title": "Myph X Pro 5G",
+  "description": "Flagship smartphone with AI camera and fast charging",
+  "stock_qty": 200,
+  "price": 74999,
+  "category_id": "cat_mobiles",
+  "path": "Electronics/Mobiles/Smartphones"
+}
+
+Category Collection
+
+To support category-based search and tree structure:
+
+{
+  "_id": "cat_mobiles",
+  "name": "Mobiles",
+  "parent_category": "Electronics",
+  "path": "Electronics/Mobiles"
+}
+
+The path field allows easy traversal of subcategories.
+
+Querying all products in a category becomes simple:
+
+db.products.find({ "path": /^Electronics\/Mobiles/ })
+
+
+This structure supports hierarchical navigation and fast category-based filtering.
+
+
+---
+
+🛒 3. Cart Data Model
+
+Each user has a shopping cart with multiple items.
+
+{
+  "_id": "cart_u102",
+  "user_id": "U102",
+  "status": "active",
+  "created_at": ISODate("2025-10-24T10:00:00Z"),
+  "items": [
+    { "product_id": "p101", "quantity": 1, "unit_price": 74999 },
+    { "product_id": "p105", "quantity": 3, "unit_price": 999 }
+  ],
+  "total_amount": 77996
+}
+
+
+---
+
+📊 4. Cart Analysis for Consumer Selection
+
+Cart analysis helps Myph understand:
+
+Frequently selected products
+
+Popular combinations (e.g., “Phone + Case + Charger”)
+
+Unusual or surplus selections (outliers)
+
+Average spend per user segment
+
+
+Techniques Used
+
+Analysis Type	Purpose	Example
+
+Association Rules	Find products often bought together	Myph X Pro → Myph Case
+Clustering	Group customers by buying behavior	Budget vs Premium buyers
+Outlier Detection	Detect abnormal carts (large quantities or values)	20 identical phones → reseller/cart anomaly
+Abandoned Cart Analysis	Identify items often added but not purchased	Myph Flip Lite added but not ordered
+
+
+
+---
+
+⚙️ 5. Outlier (Surplus) Selection Detection
+
+Yes, cart analysis can detect outlier or surplus selections.
+
+Example Query (MongoDB):
+
+db.carts.aggregate([
+  { $project: { 
+      user_id: 1,
+      total_qty: { $sum: "$items.quantity" },
+      total_value: { $sum: { $map: { input: "$items", as: "i", in: { $multiply: ["$$i.unit_price", "$$i.quantity"] } } } }
+  }},
+  { $match: { $or: [ { total_qty: { $gt: 10 } }, { total_value: { $gt: 100000 } } ] } }
+]);
+
+This highlights carts with unusually large item counts or total prices, useful for fraud detection or inventory alerts.
+
+
+---
+
+🧮 6. Relational Database Role
+
+✅ Yes — A Relational Database can handle these transactions.
+
+Relational databases are well-suited for:
+
+Transactional integrity (ACID) — essential for e-commerce.
+
+Inventory consistency — ensuring stock is updated correctly.
+
+Complex joins — retrieving category-wise products or cart summaries.
+
+Rollback and recovery — automatic error handling.
+
+
+Sample SQL Schema
+
+CREATE TABLE Category (
+  category_id INT PRIMARY KEY,
+  name VARCHAR(50),
+  parent_id INT,
+  path VARCHAR(100)
+);
+
+CREATE TABLE Product (
+  product_id INT PRIMARY KEY,
+  title VARCHAR(100),
+  description TEXT,
+  stock_qty INT,
+  price DECIMAL(10,2),
+  category_id INT REFERENCES Category(category_id)
+);
+
+CREATE TABLE Cart (
+  cart_id INT PRIMARY KEY,
+  user_id INT,
+  created_at DATETIME,
+  status VARCHAR(20)
+);
+
+CREATE TABLE CartItem (
+  cart_id INT REFERENCES Cart(cart_id),
+  product_id INT REFERENCES Product(product_id),
+  quantity INT,
+  unit_price DECIMAL(10,2)
+);
+
+Example Query – List all products in a category
+
+SELECT p.title, p.price
+FROM Product p
+JOIN Category c ON p.category_id = c.category_id
+WHERE c.path LIKE 'Electronics/Mobiles%';
+
+
+---
+
+🔄 7. Recovery in Carting and Commerce
+
+Recovery ensures data consistency when failures occur (payment, network, or transaction crash).
+
+Recovery Mechanisms
+
+Type	Description	Example
+
+Transactional Rollback	If a transaction fails, all updates are undone	SQL ROLLBACK
+Checkpointing & Logging	Database writes logs for crash recovery	Write-Ahead Logging (WAL)
+Auto Cart Save	Active carts are saved for future login	Session cart persistence
+Replication & Backup	Keeps data safe across servers	MongoDB replica set / SQL replication
+Event-based Compensation	Failed payments trigger stock re-release	Cart release microservice
+
+
+Example Recovery Flow
+
+1. User adds items → cart saved.
+
+
+2. Payment fails → transaction rolled back.
+
+
+3. Cart status changes to “Pending” → user can retry later.
+
+
+4. Database ensures no duplicate stock deduction.
+
+
+
+
+---
+
+🧠 8. Lab Notes Summary
+
+Aspect	Implementation / Observation
+
+System Goal	Build category-based cart analysis for Myph’s new phones.
+Data Model	Product–Category–Cart–CartItem model with category tree path.
+Cart Analysis	Detects frequent purchases, abandoned carts, and outliers.
+Outlier Detection	Identifies surplus or abnormal selections.
+Relational DB Role	Supports ACID transactions and joins for analytics.
+Recovery Mechanism	Rollback, logs, and replication ensure consistency.
+
+
+
+---
+
+✅ Conclusion
+
+The Cart Analysis System for Myph enables:
+
+Efficient product retrieval by category hierarchy,
+
+Insightful customer behavior analytics,
+
+Detection of surplus or fraudulent cart selections, and
+
+Reliable recovery through transactional control.
+
+
+Both Relational and NoSQL databases can support this use case:
+
+Relational DB → Reliable for transactions.
+
+NoSQL → Scalable for real-time analytics.
+
+
+
+---
+
+Would you like me to include a diagram (ER + Category Tree + Cart Relationship) to attach to your lab notes? It will make your submission visually complete and easy to score full marks.
+
